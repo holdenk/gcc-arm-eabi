@@ -1,8 +1,8 @@
 #!/bin/bash
-set -e # Exit on failure
 
 # The gcc-arm-none-eabi debian packages are either out of date, not fully working, or not provided.
 # Instead download binary realease and package into debian file to install to /usr.
+set -ex # Exit on failure, trace commands
 
 VER=15:15.3.rel1-9kmhallen
 URL=https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi.tar.xz
@@ -21,7 +21,9 @@ if ! dpkg -s curl &>/dev/null; then
   echo "Installing curl"
   sudo apt install -y curl
 fi
-curl -fSL -o gcc-arm-none-eabi.tar "$URL"
+if [[ ! -f gcc-arm-none-eabi.tar ]]; then
+  curl -fSL -o gcc-arm-none-eabi.tar "$URL"
+fi
 
 echo "Verifying..."
 if ! dpkg -s coreutils &>/dev/null; then
@@ -29,17 +31,17 @@ if ! dpkg -s coreutils &>/dev/null; then
   sudo apt install -y coreutils
 fi
 echo "563bebb2b97d53382b956d6ee1fe61e2cae26699901417234a37df505ef9b5fa gcc-arm-none-eabi.tar" > gcc-arm-none-eabi.tar.sha256asc
-sha256sum --check gcc-arm-none-eabi.tar.sha256asc
+sha256sum --check gcc-arm-none-eabi.tar.sha256asc || (curl -fSL -o gcc-arm-none-eabi.tar "$URL" && sha256sum --check gcc-arm-none-eabi.tar.sha256asc)
 rm gcc-arm-none-eabi.tar.sha256asc
 
 echo "Extracting..."
 tar -xf gcc-arm-none-eabi.tar
-rm gcc-arm-none-eabi.tar
 
 echo "Generating debian package..."
-mkdir gcc-arm-none-eabi
-mkdir gcc-arm-none-eabi/DEBIAN
-mkdir gcc-arm-none-eabi/usr
+rm -rf gcc-arm-none-eabi
+mkdir -p gcc-arm-none-eabi
+mkdir -p gcc-arm-none-eabi/DEBIAN
+mkdir -p gcc-arm-none-eabi/usr
 cat << EOF > gcc-arm-none-eabi/DEBIAN/control
 Package: gcc-arm-none-eabi
 Version: $VER
@@ -47,6 +49,7 @@ Architecture: amd64
 Maintainer: kmhallen
 Depends: libncursesw5 | libncursesw6, python3.8
 Description: Arm Embedded toolchain
+Provides: gcc-arm-elf-eabi
 EOF
 mv arm-gnu-toolchain-*-arm-none-eabi/* gcc-arm-none-eabi/usr/
 [ -d gcc-arm-none-eabi/usr/include/gdb ] && rm -r gcc-arm-none-eabi/usr/include/gdb
@@ -54,6 +57,13 @@ mv arm-gnu-toolchain-*-arm-none-eabi/* gcc-arm-none-eabi/usr/
 [ -d gcc-arm-none-eabi/usr/share/gdb ] && rm -r gcc-arm-none-eabi/usr/share/gdb
 [ -d gcc-arm-none-eabi/usr/share/info ] && rm -r gcc-arm-none-eabi/usr/share/info
 [ -d gcc-arm-none-eabi/usr/share/man/man7 ] && rm -r gcc-arm-none-eabi/usr/share/man/man7
+# Rockbox's configure looks for arm-elf-eabi-* tools. ARM doesn't ship an
+# arm-elf-eabi toolchain, so provide arm-elf-eabi-* aliases for arm-none-eabi-*.
+echo "Adding arm-elf-eabi-* symlinks..."
+for tool in gcc-arm-none-eabi/usr/bin/arm-none-eabi-*; do
+  name=$(basename "$tool")
+  ln -sf "$name" "gcc-arm-none-eabi/usr/bin/arm-elf-eabi-${name#arm-none-eabi-}"
+done
 codename=`lsb_release -sc`
 if [ "$codename" = "noble" ]; then
   echo "Adding symlinks for libncursesw.so.5 and libtinfo.so.5..."
@@ -80,7 +90,7 @@ echo "Installing..."
 sudo apt install ./gcc-arm-none-eabi.deb -y --allow-downgrades --reinstall
 
 echo "Removing temporary files..."
-rm -r gcc-arm-*
-rm -r arm-gnu-toolchain-*
+# Keep gcc-arm-none-eabi.tar so a re-run can skip the download.
+rm -rf gcc-arm-none-eabi gcc-arm-none-eabi.deb arm-gnu-toolchain-*-arm-none-eabi
 
 echo "Done."
